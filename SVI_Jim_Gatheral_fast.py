@@ -32,8 +32,6 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple, Union, List
 from scipy import optimize
 
-# Black–Scholes hooks (you already have these)
-# ---------------------------------------------------------------------
 from black_scholes import (
     calculate_option_price as _bs_price,
     calculate_IV as _bs_iv,
@@ -56,8 +54,6 @@ def _bs_price_vec(S, K, T, sigma, r, q, is_call_bool):
     put_prices = _bs_price(S, K, T, sigma, r=r, q=q, call_or_put="put")
     return np.where(is_call, call_prices, put_prices)
 
-# Utilities
-# ---------------------------------------------------------------------
 EPS = 1e-12
 
 def forward_from_spot(S: float, T: float, r: float, q: float) -> float:
@@ -74,8 +70,7 @@ def calculate_T(
     t_exp = pd.to_datetime(exp_date) + pd.Timedelta(hours=expiry_hour_local)
     return float(max((t_exp - t0).total_seconds() / (365.0 * 24.0 * 3600.0), 1e-6))
 
-# Minimal Raw-SVI slice
-# ---------------------------------------------------------------------
+# Raw-SVI slice
 @dataclass
 class SVIRaw:
     a: float
@@ -90,7 +85,6 @@ class SVIRaw:
         return out if out.ndim else float(out)
 
 # Quote container
-# ---------------------------------------------------------------------
 @dataclass
 class Quote:
     K: float
@@ -99,7 +93,6 @@ class Quote:
     is_iv: bool
 
 # Single-slice calibration (vega-weighted price fit; robust seed)
-# --------------------------------------------------------------------
 def calibrate_raw_slice2(
     S: float, T: float, r: float, q: float,
     quotes: Sequence[Quote],
@@ -248,15 +241,7 @@ def calibrate_raw_slice2(
     return _raw_from_x(sol.x)
 
 # MAIN CLASS — minimal surface builder & evaluator
-# ---------------------------------------------------------------------
 class SVI:
-    """
-    Minimal IV surface:
-      - __init__(price_source='price' or 'iv')
-      - .fit(as_of_t, spot_price, strikes, exp_dates, is_calls, values, r=0.04, q=0.0)
-      - .iv(strikes, T) -> implied vol(s)
-    """
-
     def __init__(self, price_source: str = "price"):
         assert price_source in ("price", "iv")
         self.price_source = price_source
@@ -405,8 +390,6 @@ class SVI:
         C_pv_t = np.exp(-self.r * t) * C_over_K_undisc_t * Kt
         return float(C_pv_t)
 
-    # ------------------ PUBLIC API ------------------
-
     def fit(self, as_of_t: str,
         spot_price: float,
         strikes: Sequence[float],
@@ -553,7 +536,7 @@ if __name__=="__main__":
     surf=SVI(price_source="price")
     surf.fit(close_t,spot_price,strikes,exp_dates,is_calls,prices,r=r,q=q)
 
-    #get predicted IVs and prices
+    #see predicted IVs and prices for the same contracts as above
     T_s=np.array([calculate_T(close_t,exp) for exp in exp_dates])
     pred_ivs=surf.iv(strikes,T_s)    
     pred_prices=_bs_price(spot_price,strikes,T_s,pred_ivs,r=r,q=q,call_or_put=call_or_put)
@@ -573,5 +556,6 @@ if __name__=="__main__":
     })
     print(comparison_df.to_string(index=False)) 
     #low errors for strikes and times to expiry within the bounds of the input data
+
 
 

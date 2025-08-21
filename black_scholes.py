@@ -24,10 +24,6 @@ Vectorization:
   - calculate_stock_price_from_option
   - calculate_strike_for_delta
 """
-import sys,os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-
 import numpy as np
 from numpy import log, sqrt, exp
 from scipy.stats import norm

@@ -24,6 +24,10 @@ Vectorization:
   - calculate_stock_price_from_option
   - calculate_strike_for_delta
 """
+import sys,os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+
 import numpy as np
 from numpy import log, sqrt, exp
 from scipy.stats import norm
@@ -143,13 +147,6 @@ def calculate_stock_price_from_option(option_price, K, T, IV, r=0.04, q=0.0,
 # Greeks
 # -------------------------------------------------------------------
 
-def calculate_delta(S, K, T, IV, r=0.04, q=0.0, option_type="call"):
-    T_arr = np.asarray(T)
-    d1, _ = _d1_d2(S, K, T_arr, IV, r, q)
-    base = exp(-q * T_arr) * norm.cdf(d1)
-    out = base if option_type == "call" else base - exp(-q * T_arr)
-    return _maybe_scalar((S, K, T, IV, r, q), out)
-
 def calculate_vega(S, K, T, IV, r=0.04, q=0.0):
     """Return Black-Scholes Vega (per 1.0 change in volatility).
     Returns: float or ndarray
@@ -158,6 +155,13 @@ def calculate_vega(S, K, T, IV, r=0.04, q=0.0):
     d1, _ = _d1_d2(S, K, T_arr, IV, r, q)
     vega = S * exp(-q * T_arr) * norm.pdf(d1) * sqrt(T_arr)
     out = np.where(T_arr <= 0, 0.0, vega)
+    return _maybe_scalar((S, K, T, IV, r, q), out)
+
+def calculate_delta(S, K, T, IV, r=0.04, q=0.0, option_type="call"):
+    T_arr = np.asarray(T)
+    d1, _ = _d1_d2(S, K, T_arr, IV, r, q)
+    base = exp(-q * T_arr) * norm.cdf(d1)
+    out = base if option_type == "call" else base - exp(-q * T_arr)
     return _maybe_scalar((S, K, T, IV, r, q), out)
 
 def calculate_theta(S, K, T, IV, r=0.04, q=0.0, option_type="call"):

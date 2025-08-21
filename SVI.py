@@ -390,10 +390,11 @@ class SVI:
         C_pv_t = np.exp(-self.r * t) * C_over_K_undisc_t * Kt
         return float(C_pv_t)
 
-    def fit(self, as_of_t: str,
+    def fit(self, 
+        as_of_t: str, #YYYY-mm-dd HH:MM
         spot_price: float,
         strikes: Sequence[float],
-        exp_dates: Union[str, Sequence[str]],
+        exp_dates: Union[str, Sequence[str]], #YYYY-mm-dd
         is_calls: Union[bool, Sequence[bool]],
         option_values: Union[float, Sequence[float]],
         r: float = 0.04,
@@ -408,7 +409,7 @@ class SVI:
         Parameters
         ----------
         as_of_t : str
-            time of the quotes of the option contracts 'YYYY-mm-dd HH:MM'.
+            time of the option contracts quotes 'YYYY-mm-dd HH:MM'.
         spot_price : float
             Spot price at as_of_t.
         strikes : array[float]
@@ -418,9 +419,9 @@ class SVI:
         is_calls : bool or array[bool]
             True for call, False for put – per observation (or a scalar to apply to all).
         option_values : float or array
-            Observed values per observation – interpreted by price_source:
+            Observed values per observation – interpreted by self.price_source:
               - 'price' -> option prices
-              - 'iv'        -> implied volatilities
+              - 'iv' -> IVs
         r, q : floats
             Risk-free rate and dividend yield (annualized, cont.).
         """
@@ -556,6 +557,7 @@ if __name__=="__main__":
     })
     print(comparison_df.to_string(index=False)) 
     #low errors for strikes and times to expiry within the bounds of the input data
+
 
 
 

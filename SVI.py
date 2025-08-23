@@ -231,7 +231,7 @@ def calibrate_raw_slice2(
                 b*sqrt_,           # d/dsigma
             ], dtype=float)
             pen = -min_w
-            J[-1, :] = 2e3 * pen * dmin
+            J[-1, :] = -2e3 * pen * dmin
         return J
 
     sol = optimize.least_squares(
@@ -556,7 +556,7 @@ if __name__=="__main__":
         'Price Error': price_errors
     })
     print(comparison_df.to_string(index=False)) 
-    #low errors for strikes and times to expiry within the bounds of the input data
+
 
 
 

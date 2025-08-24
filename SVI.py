@@ -10,6 +10,7 @@ Usage overview
 - Query IVs: `surf.iv(strikes, T)` where `T` is YEARS to expiry (both float or float array)
   - Returns the predicted IV(s) as float or float array matching input shapes
   - Use `calculate_T(as_of_t, exp_date)` to compute `T` (time to expiry in years)
+  (the contracts are weighted by vega by default. u can also try something like vega**2 / quotes spread**2 or vega**2/(quotes spread*T)**2 ) 
 
 example:
 surf = SVI(price_source="price")
@@ -359,7 +360,6 @@ class SVI:
             return float(C_pv_t)
 
         # --- Interpolation: t is BETWEEN two calibrated slices ---
-        # This part was already correct and remains the same.
         idx_right = np.searchsorted(Ts, t)
         T1, sl1, _ = self.slices[idx_right - 1]
         T2, sl2, _ = self.slices[idx_right]
@@ -556,6 +556,7 @@ if __name__=="__main__":
         'Price Error': price_errors
     })
     print(comparison_df.to_string(index=False)) 
+
 
 
 

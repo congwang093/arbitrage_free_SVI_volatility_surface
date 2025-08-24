@@ -8,9 +8,9 @@ Usage overview
   - `strikes` (float), `exp_dates` (float), `is_calls` (bool), `option_values` (float): single vals or arrays; all are broadcast to a common length
   - `option_values` are option prices if `price_source="price"`, or implied vols if `price_source="iv"`
 - Query IVs: `surf.iv(strikes, T)` where `T` is YEARS to expiry (both float or float array)
-  - Returns the predicted IV(s) as float or float array matching input shapes
-  - Use `calculate_T(as_of_t, exp_date)` to compute `T` (time to expiry in years)
-  (the contracts are weighted by vega by default. u can also try something like vega**2 / quotes spread**2) 
+- Or query IVs from delta: `surf.iv_from_delta(deltas, T, is_call=None)` (both float or float array)
+- both Returns the predicted IV(s) as float or float array matching input shapes
+- Use `calculate_T(as_of_t, exp_date)` to compute `T` (time to expiry in years)
 
 example:
 surf = SVI(price_source="price")
@@ -32,7 +32,10 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple, Union, List
 from scipy import optimize
+from scipy.stats import norm
 
+# Black–Scholes hooks (you already have these)
+# ---------------------------------------------------------------------
 from black_scholes import (
     calculate_option_price as _bs_price,
     calculate_IV as _bs_iv,
@@ -55,6 +58,8 @@ def _bs_price_vec(S, K, T, sigma, r, q, is_call_bool):
     put_prices = _bs_price(S, K, T, sigma, r=r, q=q, call_or_put="put")
     return np.where(is_call, call_prices, put_prices)
 
+# Utilities
+# ---------------------------------------------------------------------
 EPS = 1e-12
 
 def forward_from_spot(S: float, T: float, r: float, q: float) -> float:
@@ -71,7 +76,8 @@ def calculate_T(
     t_exp = pd.to_datetime(exp_date) + pd.Timedelta(hours=expiry_hour_local)
     return float(max((t_exp - t0).total_seconds() / (365.0 * 24.0 * 3600.0), 1e-6))
 
-# Raw-SVI slice
+# Minimal Raw-SVI slice
+# ---------------------------------------------------------------------
 @dataclass
 class SVIRaw:
     a: float
@@ -86,6 +92,7 @@ class SVIRaw:
         return out if out.ndim else float(out)
 
 # Quote container
+# ---------------------------------------------------------------------
 @dataclass
 class Quote:
     K: float
@@ -94,6 +101,7 @@ class Quote:
     is_iv: bool
 
 # Single-slice calibration (vega-weighted price fit; robust seed)
+# --------------------------------------------------------------------
 def calibrate_raw_slice2(
     S: float, T: float, r: float, q: float,
     quotes: Sequence[Quote],
@@ -232,6 +240,7 @@ def calibrate_raw_slice2(
                 b*sqrt_,           # d/dsigma
             ], dtype=float)
             pen = -min_w
+            # J[-1, :] = 2e3 * pen * dmin
             J[-1, :] = -2e3 * pen * dmin
         return J
 
@@ -242,7 +251,15 @@ def calibrate_raw_slice2(
     return _raw_from_x(sol.x)
 
 # MAIN CLASS — minimal surface builder & evaluator
+# ---------------------------------------------------------------------
 class SVI:
+    """
+    Minimal IV surface:
+      - __init__(price_source='price' or 'iv')
+      - .fit(as_of_t, spot_price, strikes, exp_dates, is_calls, values, r=0.04, q=0.0)
+      - .iv(strikes, T) -> implied vol(s)
+    """
+
     def __init__(self, price_source: str = "price"):
         assert price_source in ("price", "iv")
         self.price_source = price_source
@@ -360,6 +377,7 @@ class SVI:
             return float(C_pv_t)
 
         # --- Interpolation: t is BETWEEN two calibrated slices ---
+        # This part was already correct and remains the same.
         idx_right = np.searchsorted(Ts, t)
         T1, sl1, _ = self.slices[idx_right - 1]
         T2, sl2, _ = self.slices[idx_right]
@@ -390,11 +408,12 @@ class SVI:
         C_pv_t = np.exp(-self.r * t) * C_over_K_undisc_t * Kt
         return float(C_pv_t)
 
-    def fit(self, 
-        as_of_t: str, #YYYY-mm-dd HH:MM
+    # ------------------ PUBLIC API ------------------
+
+    def fit(self, as_of_t: str,
         spot_price: float,
         strikes: Sequence[float],
-        exp_dates: Union[str, Sequence[str]], #YYYY-mm-dd
+        exp_dates: Union[str, Sequence[str]],
         is_calls: Union[bool, Sequence[bool]],
         option_values: Union[float, Sequence[float]],
         r: float = 0.04,
@@ -409,7 +428,7 @@ class SVI:
         Parameters
         ----------
         as_of_t : str
-            time of the option contracts quotes 'YYYY-mm-dd HH:MM'.
+            time of the quotes of the option contracts 'YYYY-mm-dd HH:MM'.
         spot_price : float
             Spot price at as_of_t.
         strikes : array[float]
@@ -419,9 +438,9 @@ class SVI:
         is_calls : bool or array[bool]
             True for call, False for put – per observation (or a scalar to apply to all).
         option_values : float or array
-            Observed values per observation – interpreted by self.price_source:
+            Observed values per observation – interpreted by price_source:
               - 'price' -> option prices
-              - 'iv' -> IVs
+              - 'iv'        -> implied volatilities
         r, q : floats
             Risk-free rate and dividend yield (annualized, cont.).
         """
@@ -473,6 +492,154 @@ class SVI:
         self.slices.sort(key=lambda tup: tup[0])
         self.theta = self._theta_builder()
         return self
+
+
+
+    '''------the follwing functions are for helper funcs for the iv from delta func-------'''
+    def _sigma_and_K_at_k(self, k: float, t: float) -> Tuple[float, float]:
+        """
+        Given log-moneyness k and time t, return (sigma, K) where sigma is the
+        Black-Scholes IV implied by your SVI surface (via price interpolation).
+        """
+        price = self._interpolate_price_at(k=k, t=t)  # call PV at (k,t)
+        Ft = forward_from_spot(self.S, t, self.r, self.q)
+        K = float(Ft * np.exp(k))
+        sig = _implied_vol_wrap(price, self.S, K, t, self.r, self.q, call=True)
+        # Numerical guard
+        if not np.isfinite(sig) or sig <= 0.0:
+            sig = 1e-8
+        return sig, K
+
+    def _delta_at_k(self, k: float, t: float, is_call: bool) -> float:
+        """
+        Compute Black-Scholes delta at (k,t) using the SVI-implied sigma(k,t).
+        """
+        sig, K = self._sigma_and_K_at_k(k, t)
+        sqrtT = np.sqrt(max(t, EPS))
+        # Forward delta: N(d1_fwd) for calls, N(d1_fwd)-1 for puts,
+        # with d1_fwd = (ln(F/K) + 0.5*sig^2*T) / (sig*sqrt(T)) = (-k + 0.5*w)/sqrt(w).
+        d1f = (-k + 0.5 * sig * sig * t) / max(sig * sqrtT, 1e-16)
+        return norm.cdf(d1f) if is_call else (norm.cdf(d1f) - 1.0)
+    def _solve_k_for_delta(
+        self,
+        delta_target: float,
+        t: float,
+        is_call: Optional[bool],
+        bracket: Tuple[float, float] = (-5.0, 5.0),
+        tol: float = 1e-10,
+        max_expand: int = 7,
+    ) -> Tuple[float, float, float]:
+        """
+        Solve for k such that BS delta(k,t) matches delta_target under the chosen convention.
+        Returns (k*, sigma(k*,t), K(k*)).
+        """
+        if self.S is None or not self.slices or self.theta is None:
+            raise RuntimeError("call fit before iv_from_delta")
+
+        if is_call is None:
+            is_call = (delta_target >= 0.0)
+
+        if is_call:
+            lo, hi = 0.0, 1.0
+        else:
+            lo, hi = -1.0, 0.0
+        eps = 1e-10
+        delta_tgt = float(np.clip(delta_target, lo + eps, hi - eps))
+
+        def g(k: float) -> float:
+            return self._delta_at_k(k, t, is_call) - delta_tgt
+
+        # Try to bracket a root
+        klo, khi = bracket
+        glo, ghi = g(klo), g(khi)
+        expand = 0
+        while not (np.isfinite(glo) and np.isfinite(ghi) and glo * ghi <= 0.0) and expand < max_expand:
+            klo -= 2.0
+            khi += 2.0
+            glo, ghi = g(klo), g(khi)
+            expand += 1
+
+        # If still not bracketed, do a coarse grid search for a sign change
+        if not (np.isfinite(glo) and np.isfinite(ghi) and glo * ghi <= 0.0):
+            ks = np.linspace(-12.0, 12.0, 97)
+            gs = np.array([g(x) for x in ks])
+            # Find any adjacent sign change
+            sign_changes = np.where(np.isfinite(gs[:-1] * gs[1:]) & (gs[:-1] * gs[1:] <= 0.0))[0]
+            if sign_changes.size > 0:
+                i = int(sign_changes[0])
+                klo, khi = ks[i], ks[i + 1]
+            else:
+                # No sign change found; pick the best k by minimizing |g|
+                i_best = int(np.nanargmin(np.abs(gs)))
+                k_star = float(ks[i_best])
+                sig_star, K_star = self._sigma_and_K_at_k(k_star, t)
+                return k_star, sig_star, K_star
+
+        # Root find (Brent is robust for monotone g)
+        k_star = float(optimize.brentq(g, klo, khi, xtol=tol, rtol=tol, maxiter=200))
+        sig_star, K_star = self._sigma_and_K_at_k(k_star, t)
+        return k_star, sig_star, K_star
+    def strike_from_delta(
+        self,
+        deltas: Union[float, Sequence[float]],
+        T:       Union[float, Sequence[float]],
+        is_call: Optional[Union[bool, Sequence[bool]]] = None,
+    ) -> Union[float, np.ndarray]:
+        """
+        Return strike(s) corresponding to target delta(s) at maturity T. (float or np.ndarray)
+        """
+        Ds = np.atleast_1d(np.asarray(deltas, dtype=float))
+        Ts = np.atleast_1d(np.asarray(T, dtype=float))
+        if is_call is None:
+            Cs = np.array([d >= 0.0 for d in Ds], dtype=bool)
+        else:
+            Cs = np.atleast_1d(np.asarray(is_call, dtype=bool))
+        Ds, Ts, Cs = np.broadcast_arrays(Ds, Ts, Cs)
+
+        out = np.empty_like(Ds, dtype=float)
+        for idx, d in np.ndenumerate(Ds):
+            t = float(Ts[idx])
+            c = bool(Cs[idx])
+            k_star, _, K_star = self._solve_k_for_delta(float(d), t, c)
+            out[idx] = K_star
+        return float(out.item()) if out.size == 1 else out
+    '''---------------------------------------------------------------------------'''
+    
+
+    def iv_from_delta(
+        self,
+        deltas: Union[float, Sequence[float]],
+        T:       Union[float, Sequence[float]],
+        is_call: Optional[Union[bool, Sequence[bool]]] = None,
+        return_strike: bool = False,
+    ) -> Union[float, Tuple[float, float], np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+        """
+        Return IV(s) that correspond to a target delta at maturity T, by inverting for k.
+        Returns IVs or (IVs, Ks), Shape matches the broadcast of (deltas, T[, is_call]).
+        """
+        Ds = np.atleast_1d(np.asarray(deltas, dtype=float))
+        Ts = np.atleast_1d(np.asarray(T, dtype=float))
+        if is_call is None:
+            Cs = np.array([d >= 0.0 for d in Ds], dtype=bool)
+        else:
+            Cs = np.atleast_1d(np.asarray(is_call, dtype=bool))
+        Ds, Ts, Cs = np.broadcast_arrays(Ds, Ts, Cs)
+
+        ivs = np.empty_like(Ds, dtype=float)
+        Ks  = np.empty_like(Ds, dtype=float) if return_strike else None
+
+        for idx, d in np.ndenumerate(Ds):
+            t = float(Ts[idx])
+            c = bool(Cs[idx])
+            k_star, sig_star, K_star = self._solve_k_for_delta(float(d), t, c)
+            ivs[idx] = sig_star
+            if return_strike:
+                Ks[idx] = K_star
+
+        if ivs.size == 1:
+            return (float(ivs.item()), float(Ks.item())) if return_strike else float(ivs.item())
+        else:
+            return (ivs, Ks) if return_strike else ivs
 
     def iv(
         self,
@@ -556,6 +723,7 @@ if __name__=="__main__":
         'Price Error': price_errors
     })
     print(comparison_df.to_string(index=False)) 
+
 
 
 
